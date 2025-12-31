@@ -25,10 +25,42 @@ export const useChatScraper = () => {
         const handleMessage = (event: MessageEvent) => {
             if (event.data && event.data.type === "GEMINI_URL_CHANGED") {
                 const newUrl = event.data.url
-                setChats(prev => prev.map(chat => ({
-                    ...chat,
-                    isActive: newUrl.includes(chat.id)
-                })))
+                // Robust ID extraction (handles query params if any)
+                const newId = newUrl.split("/app/")[1]?.split("?")[0]
+
+                setChats(prev => {
+                    const exists = prev.some(chat => chat.id === newId)
+
+                    // If we navigated to a specific chat ID that we don't have yet, add it!
+                    if (newId && !exists) {
+                        // FIX: Better title cleaning
+                        let cleanTitle = document.title.replace(" - Gemini", "").trim()
+                        if (!cleanTitle || cleanTitle === "Google Gemini" || cleanTitle === "Gemini") {
+                            cleanTitle = "New Chat"
+                        }
+
+                        const newChat: ScrapedChat = {
+                            id: newId,
+                            title: cleanTitle,
+                            lastInteracted: "Today",
+                            timestamp: Date.now(),
+                            url: `/app/${newId}`,
+                            isActive: true
+                        }
+
+                        // Add new chat to the TOP and set as active
+                        return [newChat, ...prev].map(c => ({
+                            ...c,
+                            isActive: c.id === newId
+                        }))
+                    }
+
+                    // Otherwise just update the active state
+                    return prev.map(chat => ({
+                        ...chat,
+                        isActive: newUrl.includes(chat.id)
+                    }))
+                })
             } else if (event.data && event.data.type === "GEMINI_CHATS_INTERCEPTED") {
                 const payload = event.data.payload as ScrapedChat[]
                 console.log("[Gemini Folders] Received Intercepted Chats:", payload.length)
@@ -124,6 +156,43 @@ export const useChatScraper = () => {
             clearInterval(interval)
             window.removeEventListener("popstate", updateActive)
         }
+    }, [])
+
+    // FIX: Sync Active Chat Title (Poll sidebar for title updates)
+    useEffect(() => {
+        const syncTitle = () => {
+            setChats(prev => {
+                const activeIndex = prev.findIndex(c => c.isActive)
+                if (activeIndex === -1) return prev
+
+                const activeChat = prev[activeIndex]
+
+                // Only try to update if the current title is generic
+                if (activeChat.title !== "New Chat" && activeChat.title !== "Google Gemini") return prev
+
+                // Try to find the link in the sidebar
+                const sideNav = deepQuerySelectorAll('side-navigation-content')[0] || deepQuerySelectorAll('bard-sidenav')[0]
+                if (!sideNav) return prev
+
+                // Look for the link corresponding to this chat ID
+                const link = deepQuerySelectorAll(`a[href*="${activeChat.id}"]`, sideNav)[0]
+                if (!link || !link.textContent) return prev
+
+                const realTitle = link.textContent.trim()
+
+                // If we found a real title that is different, update state
+                if (realTitle && realTitle.length > 0 && realTitle !== activeChat.title && realTitle !== "New Chat") {
+                    const newChats = [...prev]
+                    newChats[activeIndex] = { ...activeChat, title: realTitle }
+                    return newChats
+                }
+                return prev
+            })
+        }
+
+        // Check every 2 seconds
+        const interval = setInterval(syncTitle, 2000)
+        return () => clearInterval(interval)
     }, [])
 
     return {
