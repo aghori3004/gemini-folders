@@ -1,11 +1,35 @@
 import { useStorage } from "@plasmohq/storage/hook"
+import { Storage } from "@plasmohq/storage"
 import { useCallback } from "react"
-import type { Folder, ChatMetadata } from "../types"
+import type { Folder, ChatMetadata, ScrapedChat } from "../types"
 
+// Sync storage for user settings/folders (Cross-device)
+const storage = new Storage({
+    area: "sync"
+})
+
+// Local storage for heavy chat cache (Device-specific, high capacity)
+const localStorage = new Storage({
+    area: "local"
+})
 
 export const useFolderStore = () => {
-    const [folders, setFolders] = useStorage<Folder[]>("folders", [])
-    const [chatMetadata, setChatMetadata] = useStorage<Record<string, ChatMetadata>>("chat-metadata", {})
+    // Sync Storage State
+    const [folders, setFolders] = useStorage<Folder[]>({
+        key: "folders",
+        instance: storage
+    }, [])
+
+    const [chatMetadata, setChatMetadata] = useStorage<Record<string, ChatMetadata>>({
+        key: "chat-metadata",
+        instance: storage
+    }, {})
+
+    // Local Storage State (Read/Write via this hook if needed, but primarily used by Scraper)
+    const [cachedChats, setCachedChats] = useStorage<ScrapedChat[]>({
+        key: "cached-chats",
+        instance: localStorage
+    }, [])
 
     const createFolder = useCallback(async (name: string, initialChatIds: string[] = []) => {
         const newFolder: Folder = {
@@ -77,6 +101,7 @@ export const useFolderStore = () => {
     return {
         folders,
         chatMetadata,
+        cachedChats,
         createFolder,
         deleteFolder,
         renameFolder,
@@ -88,3 +113,4 @@ export const useFolderStore = () => {
         updateChatMetadata
     }
 }
+

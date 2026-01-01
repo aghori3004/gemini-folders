@@ -219,19 +219,17 @@ export const FolderItem = ({
                             else if (isChatMatch) bgClass = "plasmo-bg-[#e0e3eb]"
 
                             return (
-                                <div
+                                <a
                                     key={chatId}
-                                    onClick={() => {
-                                        if (!isActive) {
-                                            window.postMessage({
-                                                type: "GEMINI_NAVIGATE_REQUEST",
-                                                url: chat.url
-                                            }, "*")
-                                        }
-                                    }}
-                                    className={`plasmo-flex plasmo-items-start plasmo-py-1.5 plasmo-pl-[40px] plasmo-pr-2 plasmo-cursor-pointer plasmo-rounded-xl plasmo-group plasmo-transition-colors ${bgClass}`}
+                                    href={chat.url}
+                                    className={`plasmo-flex plasmo-items-start plasmo-py-1.5 plasmo-pl-[40px] plasmo-pr-2 plasmo-cursor-pointer plasmo-rounded-xl plasmo-group plasmo-transition-colors plasmo-no-underline ${bgClass}`}
                                     onMouseEnter={() => setHoveredChatId(chatId)}
                                     onMouseLeave={() => setHoveredChatId(null)}
+                                    onClick={(e) => {
+                                        if (isActive) {
+                                            e.preventDefault()
+                                        }
+                                    }}
                                 >
                                     <div
                                         className="plasmo-flex plasmo-flex-col plasmo-flex-1 plasmo-min-w-0"
@@ -306,7 +304,7 @@ export const FolderItem = ({
                                             </div>
                                         </div>
                                     )}
-                                </div>
+                                </a>
                             )
                         })}
                         {safeChatIds.length === 0 && (
