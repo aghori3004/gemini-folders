@@ -1,99 +1,109 @@
-import { useEffect, useCallback } from "react"
-import type { ScrapedChat } from "../types"
-import { useStorage } from "@plasmohq/storage/hook"
-import { Storage } from "@plasmohq/storage"
-
-const localStorage = new Storage({
-    area: "local"
-})
+import { useEffect, useCallback, useState } from "react"
+import { useAuth } from "./useAuth"
+import { db } from "../firebase"
+import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc } from "firebase/firestore"
+import type { ScrapedChat, ChatMetadata } from "../types"
 
 export const useChatScraper = () => {
-    // 1. Storage: The single source of truth
-    const [chats, setChats] = useStorage<ScrapedChat[]>({
-        key: "cached-chats",
-        instance: localStorage
-    }, [])
+    const { user } = useAuth()
+    const [chats, setChats] = useState<ScrapedChat[]>([])
+    const [loading, setLoading] = useState(true)
+    const [activeChatId, setActiveChatId] = useState<string | null>(null)
 
-    // 2. Upsert Logic: Merges Network Data into Storage
-    const upsertChats = useCallback((newChats: ScrapedChat[]) => {
-        setChats(prev => {
-            const chatMap = new Map((prev || []).map(c => [c.id, c]))
+    // 1. Listen to Cloud State (Firestore)
+    useEffect(() => {
+        if (!user) {
+            setChats([])
+            setLoading(false)
+            return
+        }
 
-            newChats.forEach(nc => {
-                const existing = chatMap.get(nc.id)
-                chatMap.set(nc.id, {
-                    ...existing,
-                    ...nc,
-                    // Preserve isActive if network data doesn't provide it
-                    isActive: nc.isActive ?? existing?.isActive
-                })
+        const unsubscribe = onSnapshot(collection(db, "users", user.uid, "chats"), (snapshot) => {
+            const loadedChats: ScrapedChat[] = []
+            snapshot.forEach((doc) => {
+                loadedChats.push(doc.data() as ScrapedChat)
             })
-
-            // Sort by Timestamp (Newest First)
-            return Array.from(chatMap.values()).sort((a, b) => b.timestamp - a.timestamp)
+            // Sort by timestamp
+            loadedChats.sort((a, b) => b.timestamp - a.timestamp)
+            setChats(loadedChats)
+            setLoading(false)
         })
-    }, [setChats])
 
-    // 3. Event Listener: Network & URL Changes
+        return () => unsubscribe()
+    }, [user])
+
+    // 2. The "Anti-Gravity" Merge Logic
+    const upsertChats = useCallback(async (detectedChats: ScrapedChat[]) => {
+        if (!user) return
+
+        // We process each detected chat
+        const batchPromises = detectedChats.map(async (nc) => {
+            const chatRef = doc(db, "users", user.uid, "chats", nc.id)
+
+            // We need to read current state to decide logic (or use set with merge, but we have specific rules)
+            // Optimization: We could use the local 'chats' state as a cache to avoid N reads, 
+            // but for strict correctness in a race-prone env, reading is safer. 
+            // However, Firestore reads cost money. Let's use the local 'chats' state since it's synced.
+
+            const existing = chats.find(c => c.id === nc.id)
+
+            if (!existing) {
+                // New Chat -> Create
+                await setDoc(chatRef, nc)
+            } else {
+                // Exists -> Update only if newer
+                // Rule: "Upsert if Gemini has a newer lastInteracted date"
+                // Actually, timestamp is the best metric.
+                if (nc.timestamp > existing.timestamp) {
+                    await updateDoc(chatRef, {
+                        title: nc.title, // Update original title from network
+                        lastInteracted: nc.lastInteracted,
+                        timestamp: nc.timestamp,
+                        url: nc.url
+                    })
+                }
+            }
+        })
+
+        await Promise.all(batchPromises)
+    }, [user, chats])
+
+    // 3. Listen to Network Interceptor
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
-            // A. Network Data Arrived
             if (event.data?.type === "GEMINI_CHATS_DETECTED") {
                 const detected = event.data.payload as ScrapedChat[]
                 upsertChats(detected)
             }
 
-            // B. URL Changed (Optimistic "New Chat")
             if (event.data?.type === "GEMINI_URL_CHANGED") {
-                const newUrl = event.data.url
-                const newId = newUrl.split("/app/")[1]?.split("?")[0]
-
-                if (!newId) return
-
-                setChats(prev => {
-                    const safePrev = prev || []
-
-                    // Update Active State
-                    const next = safePrev.map(c => ({
-                        ...c,
-                        isActive: c.id === newId
-                    }))
-
-                    // If ID is completely new, add it optimistically
-                    if (!next.some(c => c.id === newId)) {
-                        const newChat: ScrapedChat = {
-                            id: newId,
-                            title: "New Chat", // Will be overwritten by network later
-                            lastInteracted: "Today",
-                            timestamp: Date.now(),
-                            url: `/app/${newId}`,
-                            isActive: true
-                        }
-                        return [newChat, ...next]
-                    }
-                    return next
-                })
+                const url = event.data.url
+                const id = url.split("/app/")[1]?.split("?")[0]
+                setActiveChatId(id || null)
             }
         }
 
+        // Handshake
+        window.postMessage({ type: "GEMINI_UI_READY" }, "*")
+
         window.addEventListener("message", handleMessage)
         return () => window.removeEventListener("message", handleMessage)
-    }, [upsertChats, setChats])
+    }, [upsertChats])
 
-    // 4. Manual Load More (Optional, triggered by UI button)
-    const loadMoreChats = useCallback(() => {
-        const scroller = document.querySelector('infinite-scroller') || document.querySelector('.gems-list-container')
-        if (scroller) scroller.scrollTop += 1000
-    }, [])
-
-    const scrollToTop = useCallback(() => {
-        const scroller = document.querySelector('infinite-scroller') || document.querySelector('.gems-list-container')
-        if (scroller) scroller.scrollTop = 0
+    // 4. URL Tracking (Popstate + Initial Load)
+    useEffect(() => {
+        const checkUrl = () => {
+            const id = window.location.pathname.split("/app/")[1]?.split("?")[0]
+            setActiveChatId(id || null)
+        }
+        checkUrl()
+        window.addEventListener("popstate", checkUrl)
+        return () => window.removeEventListener("popstate", checkUrl)
     }, [])
 
     return {
-        chats,
-        loadMoreChats,
-        scrollToTop
+        chats: chats.map(c => ({ ...c, isActive: c.id === activeChatId })), // Computed logic for active
+        activeChatId,
+        loading
     }
 }

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@plasmohq/storage": "^1.15.0",
+    "firebase": "^12.7.0",
     "plasmo": "0.90.5",
     "react": "18.2.0",
     "react-dom": "18.2.0",
@@ -27,12 +28,23 @@
     "prettier": "3.2.4",
     "typescript": "5.3.3"
   },
-  "permissions": [
-    "storage"
-  ],
   "manifest": {
+    "permissions": [
+      "storage",
+      "identity"
+    ],
     "host_permissions": [
-      "https://gemini.google.com/*"
-    ]
+      "https://gemini.google.com/*",
+      "https://*.firebaseio.com/*",
+      "https://*.googleapis.com/*",
+      "https://*.firebaseapp.com/*"
+    ],
+    "oauth2": {
+      "client_id": "232018677282-c91n9qct1k83dhquliuakh7kkcutnsr9.apps.googleusercontent.com",
+      "scopes": [
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile"
+      ]
+    }
   }
 }

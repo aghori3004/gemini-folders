@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from "react"
 import { useFolderStore } from "~hooks/useFolderStore"
 import { useChatScraper } from "~hooks/useChatScraper"
+import { useAuth } from "~hooks/useAuth"
 import { SearchBar } from "./SearchBar"
 import { FolderList } from "./FolderList"
 import { CreateFolderModal } from "./CreateFolderModal"
 import { AddChatModal } from "./AddChatModal"
 import type { ChatMetadata } from "~types"
-import { FolderItem, GreyFolderIcon } from "./FolderItem" // Updated import
+import { FolderItem, GreyFolderIcon } from "./FolderItem"
 
 interface MainUIProps {
     paddingLeft?: number
@@ -14,6 +15,9 @@ interface MainUIProps {
 }
 
 export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => {
+    // Auth
+    const { user, loading: authLoading, login, logout } = useAuth()
+
     // Stores
     const {
         folders,
@@ -21,51 +25,49 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
         createFolder,
         deleteFolder,
         toggleFolderCollapse,
-        expandFolders,
         resetAndExpandFolders,
         addChatsToFolder,
         removeChatFromFolder,
         updateChatMetadata
     } = useFolderStore()
 
-    const { chats } = useChatScraper()
+    const { chats, activeChatId } = useChatScraper()
 
     // Local State
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
     const [addChatFolderId, setAddChatFolderId] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState("")
+    const [isSearchOpen, setIsSearchOpen] = useState(false)
 
     // Derived State
-    const isNewChat = window.location.pathname === "/app" || window.location.pathname === "/app/"
-    const activeChat = chats.find(c => c.isActive) // Extract activeChat for easier access
+    const activeChat = chats.find(c => c.id === activeChatId)
+    const isNewChat = activeChatId === null || activeChatId === undefined || window.location.pathname.endsWith("/app") // Fallback
 
     // Ref to track which chat we last auto-expanded for
     const lastExpandedChatIdRef = useRef<string | null>(null)
 
     // Auto-expand active folder (Exclusive Mode: Closes others)
     useEffect(() => {
+        if (!user) return
         const safeFolders = folders || []
 
-        if (activeChat) {
+        if (activeChatId) {
             // Only run if we haven't already processed this chat ID
-            if (activeChat.id !== lastExpandedChatIdRef.current) {
+            if (activeChatId !== lastExpandedChatIdRef.current) {
                 const containingFolderIds = safeFolders
-                    .filter(f => f.chatIds.includes(activeChat.id))
+                    .filter(f => f.chatIds.includes(activeChatId))
                     .map(f => f.id)
 
                 // Exclusive expand: Open these, close others
+                // NOTE: This writes to Firestore, so be careful with infinite loops.
+                // resetAndExpandFolders should only trigger if state is different.
                 resetAndExpandFolders(containingFolderIds)
 
-                lastExpandedChatIdRef.current = activeChat.id
-            }
-        } else if (isNewChat) {
-            // If on explicit new chat page and haven't reset yet
-            if (lastExpandedChatIdRef.current !== "NEW_CHAT") {
-                resetAndExpandFolders([]) // Close all
-                lastExpandedChatIdRef.current = "NEW_CHAT"
+                lastExpandedChatIdRef.current = activeChatId
             }
         }
-    }, [activeChat, isNewChat, folders, resetAndExpandFolders])
+    }, [activeChatId, folders, resetAndExpandFolders, user])
+
 
     // Filtered Folders (Search)
     const filteredFolders = useMemo(() => {
@@ -76,8 +78,6 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
             // 1. Check Folder Name
             if (folder.name.toLowerCase().includes(query)) return true
             // 2. Check Chats inside this folder
-            // We need to check if ANY chat in this folder matches the query
-            // based on Real Title, Original Title, or Custom Name.
             return folder.chatIds.some(chatId => {
                 const chat = chats.find(c => c.id === chatId)
                 const meta = chatMetadata[chatId]
@@ -94,12 +94,8 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
     }, [folders, searchQuery, chats, chatMetadata])
 
     // Handlers
-    const [isSearchOpen, setIsSearchOpen] = useState(false)
-
-    // Handlers
     const handleCreateFolder = (name: string, selectedChatIds: string[]) => {
         createFolder(name, selectedChatIds)
-        // Update metadata for selected chats if needed
         selectedChatIds.forEach(id => {
             const chat = chats.find(c => c.id === id)
             if (chat) {
@@ -114,7 +110,6 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
     const handleManageChats = (addedChatIds: string[], removedChatIds: string[]) => {
         if (!addChatFolderId) return
 
-        // 1. Handle Adds
         if (addedChatIds.length > 0) {
             addChatsToFolder(addChatFolderId, addedChatIds)
             addedChatIds.forEach(id => {
@@ -128,29 +123,24 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
             })
         }
 
-        // 2. Handle Removes
         if (removedChatIds.length > 0) {
             removedChatIds.forEach(id => {
                 removeChatFromFolder(addChatFolderId, id)
             })
         }
-
         setAddChatFolderId(null)
     }
 
     const handleInsertCurrentChat = (folderId: string) => {
-        const activeChat = chats.find(c => c.isActive)
-        const chatId = activeChat?.id
-
-        if (!chatId) {
-            alert("Cannot insert an empty new chat. Please send a message first.")
+        if (!activeChatId) {
+            alert("Cannot insert empty chat. Please open a chat first.")
             return
         }
-
-        addChatsToFolder(folderId, [chatId])
-        updateChatMetadata(chatId, {
-            originalTitle: activeChat?.title || "Chat",
-            lastInteracted: activeChat?.lastInteracted
+        addChatsToFolder(folderId, [activeChatId])
+        const chat = chats.find(c => c.id === activeChatId)
+        updateChatMetadata(activeChatId, {
+            originalTitle: chat?.title || "Chat",
+            lastInteracted: chat?.lastInteracted
         })
     }
 
@@ -160,7 +150,6 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
         }
     }
 
-    // Toggle search
     const toggleSearch = () => {
         if (isSearchOpen) {
             setSearchQuery("")
@@ -170,8 +159,29 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
         }
     }
 
-    // Replace the return (...) block with this:
-    // Replace the return (...) block with this:
+    // --- RENDER ---
+
+    if (authLoading) {
+        return <div className="plasmo-p-4 plasmo-text-center plasmo-text-gray-500">Loading Gemini Folders...</div>
+    }
+
+    if (!user) {
+        return (
+            <div className="plasmo-flex plasmo-flex-col plasmo-items-center plasmo-justify-center plasmo-h-full plasmo-p-6" style={{ marginTop: '40px' }}>
+                <div className="plasmo-bg-[#1e1f20] plasmo-p-6 plasmo-rounded-xl plasmo-text-center plasmo-shadow-lg">
+                    <h2 className="plasmo-text-white plasmo-text-lg plasmo-mb-4">Gemini Folders</h2>
+                    <p className="plasmo-text-gray-400 plasmo-text-sm plasmo-mb-6">Sign in to sync your folders across devices.</p>
+                    <button
+                        onClick={login}
+                        className="plasmo-bg-[#8ab4f8] plasmo-text-[#1f1f1f] plasmo-px-4 plasmo-py-2 plasmo-rounded-full plasmo-font-medium plasmo-text-sm hover:plasmo-bg-[#aecbfa] plasmo-transition"
+                    >
+                        Sign in with Google
+                    </button>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div
             className="plasmo-w-full plasmo-flex plasmo-flex-col plasmo-font-sans"
@@ -207,12 +217,18 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
                             />
                         </div>
                     ) : (
-                        // HEADER: Icon + Text
-                        // We use gap-3 (12px) to match FolderItem's spacing
                         <div className="plasmo-flex plasmo-items-center plasmo-gap-3">
                             <span className="plasmo-text-[14px] plasmo-font-medium plasmo-text-[#1f1f1f] plasmo-select-none">
                                 Folders
                             </span>
+                            {/* Sign Out Tiny Button */}
+                            <button
+                                onClick={logout}
+                                className="plasmo-text-[10px] plasmo-text-gray-400 hover:plasmo-text-red-500 plasmo-cursor-pointer"
+                                title="Sign Out"
+                            >
+                                (Sign Out)
+                            </button>
                         </div>
                     )}
                 </div>
@@ -259,7 +275,7 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
                 allChats={chats}
                 metadata={chatMetadata || {}}
                 isNewChatActive={isNewChat}
-                currentChatId={activeChat?.id}
+                currentChatId={activeChatId}
                 onToggle={id => toggleFolderCollapse(id)}
                 onInsertChat={handleInsertCurrentChat}
                 onAddChat={(folderId) => setAddChatFolderId(folderId)}
@@ -268,7 +284,7 @@ export const MainUI = ({ paddingLeft = 24, paddingRight = 16 }: MainUIProps) => 
                 onRemoveChat={(folderId, chatId) => removeChatFromFolder(folderId, chatId)}
                 searchQuery={searchQuery}
             />
-            {/* ... Modals (CreateFolderModal, AddChatModal) ... */}
+
             <CreateFolderModal
                 isOpen={isCreateModalOpen}
                 onClose={() => setIsCreateModalOpen(false)}

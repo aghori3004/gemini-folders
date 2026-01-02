@@ -1,107 +1,158 @@
-import { useStorage } from "@plasmohq/storage/hook"
-import { Storage } from "@plasmohq/storage"
-import { useCallback } from "react"
-import type { Folder, ChatMetadata, ScrapedChat } from "../types"
-
-// Sync storage for user settings/folders (Cross-device)
-const storage = new Storage({
-    area: "sync"
-})
-
-// Local storage for heavy chat cache (Device-specific, high capacity)
-const localStorage = new Storage({
-    area: "local"
-})
+import { useState, useEffect, useCallback } from "react"
+import { useAuth } from "./useAuth"
+import { db } from "../firebase"
+import {
+    collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, writeBatch
+} from "firebase/firestore"
+import type { Folder, ChatMetadata } from "../types"
 
 export const useFolderStore = () => {
-    // Sync Storage State
-    const [folders, setFolders] = useStorage<Folder[]>({
-        key: "folders",
-        instance: storage
-    }, [])
+    const { user } = useAuth()
+    const [folders, setFolders] = useState<Folder[]>([])
+    const [chatMetadata, setChatMetadata] = useState<Record<string, ChatMetadata>>({})
+    const [loading, setLoading] = useState(true)
 
-    const [chatMetadata, setChatMetadata] = useStorage<Record<string, ChatMetadata>>({
-        key: "chat-metadata",
-        instance: storage
-    }, {})
+    // 1. Sync Folders
+    useEffect(() => {
+        if (!user) {
+            setFolders([])
+            return
+        }
+        const unsubscribe = onSnapshot(collection(db, "users", user.uid, "folders"), (snapshot) => {
+            const list: Folder[] = []
+            snapshot.forEach(doc => list.push(doc.data() as Folder))
+            setFolders(list)
+            setLoading(false)
+        })
+        return () => unsubscribe()
+    }, [user])
 
-    // Local Storage State (Read/Write via this hook if needed, but primarily used by Scraper)
-    const [cachedChats, setCachedChats] = useStorage<ScrapedChat[]>({
-        key: "cached-chats",
-        instance: localStorage
-    }, [])
+    // 2. Sync Chat Metadata
+    useEffect(() => {
+        if (!user) {
+            setChatMetadata({})
+            return
+        }
+        const unsubscribe = onSnapshot(collection(db, "users", user.uid, "chatMetadata"), (snapshot) => {
+            const meta: Record<string, ChatMetadata> = {}
+            snapshot.forEach(doc => {
+                meta[doc.id] = doc.data() as ChatMetadata
+            })
+            setChatMetadata(meta)
+        })
+        return () => unsubscribe()
+    }, [user])
 
+    // ACTIONS
     const createFolder = useCallback(async (name: string, initialChatIds: string[] = []) => {
+        if (!user) return
+        const id = crypto.randomUUID()
         const newFolder: Folder = {
-            id: crypto.randomUUID(),
+            id,
             name,
             chatIds: initialChatIds,
-            collapsed: true
+            collapsed: true // Default collapsed
         }
-        await setFolders((prev) => [...(prev || []), newFolder])
-    }, [setFolders])
+        await setDoc(doc(db, "users", user.uid, "folders", id), newFolder)
+    }, [user])
 
     const deleteFolder = useCallback(async (folderId: string) => {
-        await setFolders((prev) => prev.filter((f) => f.id !== folderId))
-    }, [setFolders])
+        if (!user) return
+        await deleteDoc(doc(db, "users", user.uid, "folders", folderId))
+    }, [user])
 
     const renameFolder = useCallback(async (folderId: string, newName: string) => {
-        await setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, name: newName } : f)))
-    }, [setFolders])
+        if (!user) return
+        await updateDoc(doc(db, "users", user.uid, "folders", folderId), { name: newName })
+    }, [user])
 
     const toggleFolderCollapse = useCallback(async (folderId: string, collapsed?: boolean) => {
-        await setFolders((prev) => prev.map((f) => {
-            if (f.id !== folderId) return f
-            return { ...f, collapsed: collapsed ?? !f.collapsed }
-        }))
-    }, [setFolders])
+        if (!user) return
+        // Get current state if not provided
+        // But for optimization, we assume the UI passed the desired state or we toggle based on local
+        // Ideally we read the specific doc, but relying on local state is faster for UI.
+        const folder = folders.find(f => f.id === folderId)
+        if (!folder) return
+
+        await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
+            collapsed: collapsed ?? !folder.collapsed
+        })
+    }, [user, folders])
 
     const expandFolders = useCallback(async (folderIds: string[]) => {
-        await setFolders((prev) => prev.map((f) => {
-            if (folderIds.includes(f.id)) {
-                return { ...f, collapsed: false }
-            }
-            return f
-        }))
-    }, [setFolders])
+        if (!user) return
+        const batch = writeBatch(db)
 
-    const addChatsToFolder = useCallback(async (folderId: string, chatIds: string[]) => {
-        await setFolders((prev) => prev.map((f) => {
-            if (f.id !== folderId) return f
-            // dedicated set to avoid duplicates
-            const newSet = new Set([...f.chatIds, ...chatIds])
-            return { ...f, chatIds: Array.from(newSet) }
-        }))
-    }, [setFolders])
+        // This function sets collapsed=false for specific folders
+        folderIds.forEach(id => {
+            const ref = doc(db, "users", user.uid, "folders", id)
+            batch.update(ref, { collapsed: false })
+        })
+
+        await batch.commit()
+    }, [user])
+
+    const resetAndExpandFolders = useCallback(async (activeFolderIds: string[]) => {
+        if (!user) return
+        const batch = writeBatch(db)
+
+        folders.forEach(f => {
+            const shouldBeOpen = activeFolderIds.includes(f.id)
+            // Only update if changed (Minimize writes)
+            if (f.collapsed === shouldBeOpen) {
+                // Wait, if collapsed is true, and shouldBeOpen is true (it should be open), then we update.
+                // If collapsed=true (closed) and shouldBeOpen=true, we update to false.
+                // If collapsed=false (open) and shouldBeOpen=false, we update to true.
+                // Wait.
+                // collapsed: true. shouldBeOpen: true. -> Needs update to false.
+                // collapsed: false. shouldBeOpen: true. -> No update.
+
+                // Logic: collapsed should be !shouldBeOpen
+            }
+
+            if (f.collapsed === shouldBeOpen) {
+                const ref = doc(db, "users", user.uid, "folders", f.id)
+                batch.update(ref, { collapsed: !shouldBeOpen })
+            }
+        })
+
+        await batch.commit()
+    }, [user, folders])
+
+    const addChatsToFolder = useCallback(async (folderId: string, newChatIds: string[]) => {
+        if (!user) return
+        const folder = folders.find(f => f.id === folderId)
+        if (!folder) return
+
+        const newSet = new Set([...folder.chatIds, ...newChatIds])
+        await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
+            chatIds: Array.from(newSet)
+        })
+    }, [user, folders])
 
     const removeChatFromFolder = useCallback(async (folderId: string, chatId: string) => {
-        await setFolders((prev) => prev.map((f) => {
-            if (f.id !== folderId) return f
-            return { ...f, chatIds: f.chatIds.filter(id => id !== chatId) }
-        }))
-    }, [setFolders])
+        if (!user) return
+        const folder = folders.find(f => f.id === folderId)
+        if (!folder) return
+
+        const newIds = folder.chatIds.filter(id => id !== chatId)
+        await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
+            chatIds: newIds
+        })
+    }, [user, folders])
 
     const updateChatMetadata = useCallback(async (id: string, meta: Partial<ChatMetadata>) => {
-        await setChatMetadata((prev) => ({
-            ...prev,
-            [id]: { ...(prev?.[id] || { id, title: "", originalTitle: "" }), ...meta }
-        }))
-    }, [setChatMetadata])
+        if (!user) return
 
-    const resetAndExpandFolders = useCallback(async (targetFolderIds: string[]) => {
-        await setFolders((prev) => {
-            const safeFolders = Array.isArray(prev) ? prev : []
-            return safeFolders.map((f) => ({
-                ...f,
-                collapsed: !targetFolderIds.includes(f.id)
-            }))
-        })
-    }, [setFolders])
+        const ref = doc(db, "users", user.uid, "chatMetadata", id)
+        // We use set with merge to ensure document exists
+        await setDoc(ref, meta, { merge: true })
+
+    }, [user])
 
     return {
         folders,
         chatMetadata,
-        cachedChats,
         createFolder,
         deleteFolder,
         renameFolder,
@@ -110,7 +161,7 @@ export const useFolderStore = () => {
         resetAndExpandFolders,
         addChatsToFolder,
         removeChatFromFolder,
-        updateChatMetadata
+        updateChatMetadata,
+        loading
     }
 }
-
