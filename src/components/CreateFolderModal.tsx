@@ -1,6 +1,5 @@
-import React, { useState, useMemo, useRef, useEffect } from "react"
+import React, { useState, useMemo, useEffect } from "react"
 import type { ScrapedChat } from "~types"
-import { useChatScraper } from "~hooks/useChatScraper"
 
 interface CreateFolderModalProps {
     isOpen: boolean
@@ -8,28 +7,50 @@ interface CreateFolderModalProps {
     onCreate: (name: string, selectedChatIds: string[]) => void
     availableChats: ScrapedChat[]
     existingNames: string[]
+    startDeepScroll?: () => void
+    stopDeepScroll?: () => void
+    scrollToTop?: () => void
+    isDeepScrolling?: boolean
 }
 
-export const CreateFolderModal = ({ isOpen, onClose, onCreate, availableChats, existingNames }: CreateFolderModalProps) => {
+export const CreateFolderModal = ({ isOpen, onClose, onCreate, availableChats, existingNames, startDeepScroll, stopDeepScroll, scrollToTop, isDeepScrolling }: CreateFolderModalProps) => {
     const [name, setName] = useState("")
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-    // Search removed as per UX requirement
-    const { loadMoreChats, scrollToTop } = useChatScraper() // Ensure this matches the function name exported from your hook
-    const [isLoadingMore, setIsLoadingMore] = useState(false)
-    const prevCountRef = useRef(availableChats.length)
+    const [searchQuery, setSearchQuery] = useState("")
 
+    // Safety
+    const safeChats = useMemo(() => availableChats || [], [availableChats])
+
+    // Filter chats
+    const filteredChats = useMemo(() => {
+        if (!searchQuery) return safeChats
+        const lowerQuery = searchQuery.toLowerCase()
+        return safeChats.filter(chat =>
+            chat.title.toLowerCase().includes(lowerQuery)
+        )
+    }, [safeChats, searchQuery])
+
+    // Reset state on open/close
     useEffect(() => {
-        if (isLoadingMore && availableChats.length > prevCountRef.current) {
-            setIsLoadingMore(false)
+        if (isOpen) {
+            scrollToTop?.()
+        } else {
+            setName("")
+            setSelectedIds(new Set())
+            setSearchQuery("")
         }
-        prevCountRef.current = availableChats.length
-    }, [availableChats.length, isLoadingMore])
+    }, [isOpen, scrollToTop])
 
+    // Stop deep scroll ONLY when modal closes or unmounts
+    useEffect(() => {
+        if (!isOpen) {
+            stopDeepScroll?.()
+        }
+    }, [isOpen, stopDeepScroll])
 
+    // Validation
     const nameExists = existingNames.some(n => n.toLowerCase() === name.trim().toLowerCase())
     const isValid = name.trim().length > 0 && !nameExists
-
-    // Filter logic removed - using availableChats directly
 
     const toggleChat = (id: string) => {
         const newSet = new Set(selectedIds)
@@ -42,24 +63,27 @@ export const CreateFolderModal = ({ isOpen, onClose, onCreate, availableChats, e
     }
 
     const handleClose = () => {
-        scrollToTop()
+        scrollToTop?.()
         onClose()
     }
 
     const handleCreate = () => {
         if (!isValid) return
         onCreate(name.trim(), Array.from(selectedIds))
-        setName("")
-        setSelectedIds(new Set())
         handleClose()
     }
 
-    // Conditional return MUST be after all hooks (useState, useMemo)
     if (!isOpen) return null
 
     return (
-        <div className="plasmo-fixed plasmo-inset-0 plasmo-z-[9999] plasmo-flex plasmo-items-center plasmo-justify-center plasmo-bg-black/40">
-            <div className="plasmo-bg-white plasmo-rounded-[20px] plasmo-w-[320px] plasmo-max-h-[85vh] plasmo-flex plasmo-flex-col plasmo-shadow-xl plasmo-overflow-hidden">
+        <div
+            className="plasmo-fixed plasmo-inset-0 plasmo-z-[9999] plasmo-flex plasmo-items-center plasmo-justify-center plasmo-bg-black/40"
+            onClick={handleClose}
+        >
+            <div
+                className="plasmo-bg-white plasmo-rounded-[20px] plasmo-w-[320px] plasmo-max-h-[85vh] plasmo-flex plasmo-flex-col plasmo-shadow-xl plasmo-overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+            >
                 {/* Header */}
                 <div className="plasmo-px-4 plasmo-pt-4 plasmo-pb-2">
                     <h2 className="plasmo-text-[16px] plasmo-text-[#1f1f1f] plasmo-font-medium">New folder</h2>
@@ -73,24 +97,56 @@ export const CreateFolderModal = ({ isOpen, onClose, onCreate, availableChats, e
                             <label className={`plasmo-text-[11px] ${nameExists ? "plasmo-text-red-500" : "plasmo-text-[#0b57d0]"}`}>Name</label>
                             <input
                                 autoFocus
-                                className="plasmo-bg-transparent plasmo-border-none plasmo-outline-none plasmo-text-[14px] plasmo-text-[#1f1f1f]"
+                                className="plasmo-bg-transparent plasmo-border-none plasmo-outline-none plasmo-text-[14px] plasmo-text-[#1f1f1f] plasmo-w-full"
                                 value={name}
                                 onChange={e => setName(e.target.value)}
                                 placeholder="Folder name"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && isValid) {
+                                        handleCreate()
+                                    }
+                                    e.stopPropagation()
+                                }}
                             />
                         </div>
                         {nameExists && <span className="plasmo-text-[11px] plasmo-text-red-500 plasmo-mt-1">Name already exists</span>}
                     </div>
 
-                    <div className="plasmo-text-[12px] plasmo-font-medium plasmo-text-[#1f1f1f] plasmo-mb-2">
-                        Add chats
+                    <div className="plasmo-flex plasmo-items-center plasmo-justify-between plasmo-mb-2">
+                        <div className="plasmo-text-[12px] plasmo-font-medium plasmo-text-[#1f1f1f]">
+                            Add chats
+                        </div>
+                        {/* Search Input for Chats */}
+                        <input
+                            type="text"
+                            placeholder="Search chats..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="plasmo-bg-[#f0f4f9] plasmo-border-none plasmo-rounded-full plasmo-px-3 plasmo-py-1 plasmo-text-[12px] plasmo-text-[#1f1f1f] plasmo-outline-none focus:plasmo-ring-2 focus:plasmo-ring-[#0b57d0]/20 plasmo-w-[140px]"
+                        />
                     </div>
-
-                    {/* Search removed here */}
 
                     {/* Chat List */}
                     <div className="plasmo-flex-1 plasmo-overflow-y-auto plasmo-min-h-[150px] plasmo-max-h-[250px] plasmo-mb-4">
-                        {availableChats.map(chat => (
+                        {filteredChats.length === 0 && (
+                            <div className="plasmo-text-center plasmo-py-10 plasmo-text-[#444746] plasmo-text-[13px]">
+                                {isDeepScrolling ? (
+                                    <div className="plasmo-flex plasmo-flex-col plasmo-items-center plasmo-gap-2">
+                                        <div className="plasmo-animate-spin plasmo-rounded-full plasmo-h-4 plasmo-w-4 plasmo-border-b-2 plasmo-border-[#0b57d0]"></div>
+                                        <span>Searching older chats...</span>
+                                    </div>
+                                ) : (
+                                    <div className="plasmo-flex plasmo-flex-col plasmo-items-center">
+                                        <span>No matching chats found</span>
+                                        <span className="plasmo-text-[11px] plasmo-text-gray-400 plasmo-mt-1">
+                                            (scanned {safeChats.length} chats)
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {filteredChats.map(chat => (
                             <div
                                 key={chat.id}
                                 className="plasmo-flex plasmo-items-center plasmo-justify-between plasmo-py-2 plasmo-px-2 plasmo-cursor-pointer hover:plasmo-bg-[#f0f4f9] plasmo-rounded-lg"
@@ -110,19 +166,26 @@ export const CreateFolderModal = ({ isOpen, onClose, onCreate, availableChats, e
                             </div>
                         ))}
 
-                        {/* Load More Button */}
+                        {/* Deep Search Button */}
                         <div className="plasmo-px-2 plasmo-py-2">
-                            <div
-                                className="plasmo-flex plasmo-items-center plasmo-justify-center plasmo-h-[32px] plasmo-cursor-pointer hover:plasmo-bg-[#f0f4f9] plasmo-rounded-full plasmo-text-[#0b57d0] plasmo-text-[13px] plasmo-font-medium plasmo-mt-2"
+                            <button
+                                type="button"
+                                className="plasmo-flex plasmo-items-center plasmo-justify-center plasmo-w-full plasmo-h-[32px] plasmo-cursor-pointer hover:plasmo-bg-[#f0f4f9] plasmo-rounded-full plasmo-text-[#0b57d0] plasmo-text-[12px] plasmo-font-medium plasmo-mt-2 plasmo-border-none plasmo-bg-transparent"
                                 onClick={(e) => {
-                                    e.stopPropagation();
-                                    setIsLoadingMore(true);
-                                    loadMoreChats(); // Trigger the scroll
-                                    setTimeout(() => setIsLoadingMore(false), 8000);
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    startDeepScroll?.()
                                 }}
                             >
-                                <span className="plasmo-font-medium">{isLoadingMore ? "Loading..." : "Load more chats..."}</span>
-                            </div>
+                                {isDeepScrolling ? (
+                                    <div className="plasmo-flex plasmo-items-center plasmo-gap-2">
+                                        <div className="plasmo-animate-spin plasmo-rounded-full plasmo-h-3 plasmo-w-3 plasmo-border-b-2 plasmo-border-[#0b57d0]"></div>
+                                        <span>Searching older chats...</span>
+                                    </div>
+                                ) : (
+                                    "Deep Search Older Chats..."
+                                )}
+                            </button>
                         </div>
                     </div>
                 </div>

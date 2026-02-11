@@ -9,12 +9,13 @@
 # testing
 /coverage
 
-#cache
+# cache
 .turbo
 
 # misc
 .DS_Store
 *.pem
+Thumbs.db
 
 # debug
 npm-debug.log*
@@ -23,8 +24,10 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # local env files
-.env*
+.env
+.env.*
 
+# build output
 out/
 build/
 dist/
@@ -36,4 +39,14 @@ dist/
 keys.json
 
 # typescript
-.tsbuildinfo
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+
+# temp / internal docs (not for repo)
+task.md
+walkthrough.md
+implementation_plan.md
+upload-files/

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import { useAuth } from "./useAuth"
 import { db } from "../firebase"
 import {
-    collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, writeBatch
+    collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, writeBatch, arrayUnion, arrayRemove
 } from "firebase/firestore"
 import type { Folder, ChatMetadata } from "../types"
 
@@ -11,6 +11,7 @@ export const useFolderStore = () => {
     const [folders, setFolders] = useState<Folder[]>([])
     const [chatMetadata, setChatMetadata] = useState<Record<string, ChatMetadata>>({})
     const [loading, setLoading] = useState(true)
+    const [firestoreError, setFirestoreError] = useState<string | null>(null)
 
     // 1. Sync Folders
     useEffect(() => {
@@ -18,12 +19,26 @@ export const useFolderStore = () => {
             setFolders([])
             return
         }
-        const unsubscribe = onSnapshot(collection(db, "users", user.uid, "folders"), (snapshot) => {
-            const list: Folder[] = []
-            snapshot.forEach(doc => list.push(doc.data() as Folder))
-            setFolders(list)
-            setLoading(false)
-        })
+        const unsubscribe = onSnapshot(
+            collection(db, "users", user.uid, "folders"),
+            (snapshot) => {
+                const list: Folder[] = []
+                snapshot.forEach(doc => list.push(doc.data() as Folder))
+                setFolders(list)
+                setLoading(false)
+                setFirestoreError(null)
+            },
+            (error) => {
+                if (error.code === 'permission-denied') {
+                    console.warn("[FolderStore] Firestore permission denied - user may not be fully authenticated yet")
+                    setFirestoreError("Permission denied. Please sign in again.")
+                } else {
+                    console.error("[FolderStore] Firestore error:", error)
+                    setFirestoreError("Could not load folders. Check your connection.")
+                }
+                setLoading(false)
+            }
+        )
         return () => unsubscribe()
     }, [user])
 
@@ -33,113 +48,122 @@ export const useFolderStore = () => {
             setChatMetadata({})
             return
         }
-        const unsubscribe = onSnapshot(collection(db, "users", user.uid, "chatMetadata"), (snapshot) => {
-            const meta: Record<string, ChatMetadata> = {}
-            snapshot.forEach(doc => {
-                meta[doc.id] = doc.data() as ChatMetadata
-            })
-            setChatMetadata(meta)
-        })
+        const unsubscribe = onSnapshot(
+            collection(db, "users", user.uid, "chatMetadata"),
+            (snapshot) => {
+                const meta: Record<string, ChatMetadata> = {}
+                snapshot.forEach(doc => {
+                    meta[doc.id] = doc.data() as ChatMetadata
+                })
+                setChatMetadata(meta)
+            },
+            (error) => {
+                if (error.code === 'permission-denied') {
+                    console.warn("[FolderStore] Metadata permission denied")
+                }
+            }
+        )
         return () => unsubscribe()
     }, [user])
 
     // ACTIONS
     const createFolder = useCallback(async (name: string, initialChatIds: string[] = []) => {
         if (!user) return
-        const id = crypto.randomUUID()
+        // Use Firestore SDK to generate ID
+        const newFolderRef = doc(collection(db, "users", user.uid, "folders"))
+
         const newFolder: Folder = {
-            id,
+            id: newFolderRef.id,
             name,
             chatIds: initialChatIds,
-            collapsed: true // Default collapsed
+            collapsed: true
         }
-        await setDoc(doc(db, "users", user.uid, "folders", id), newFolder)
+
+        try {
+            await setDoc(newFolderRef, newFolder)
+        } catch (e) {
+            console.error("Failed to create folder", e)
+        }
     }, [user])
 
     const deleteFolder = useCallback(async (folderId: string) => {
         if (!user) return
-        await deleteDoc(doc(db, "users", user.uid, "folders", folderId))
+        try {
+            await deleteDoc(doc(db, "users", user.uid, "folders", folderId))
+        } catch (e) {
+            console.error("Failed to delete folder", e)
+        }
     }, [user])
 
-    const renameFolder = useCallback(async (folderId: string, newName: string) => {
-        if (!user) return
-        await updateDoc(doc(db, "users", user.uid, "folders", folderId), { name: newName })
-    }, [user])
+
 
     const toggleFolderCollapse = useCallback(async (folderId: string, collapsed?: boolean) => {
         if (!user) return
-        // Get current state if not provided
-        // But for optimization, we assume the UI passed the desired state or we toggle based on local
-        // Ideally we read the specific doc, but relying on local state is faster for UI.
         const folder = folders.find(f => f.id === folderId)
         if (!folder) return
 
-        await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
-            collapsed: collapsed ?? !folder.collapsed
-        })
+        try {
+            await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
+                collapsed: collapsed ?? !folder.collapsed
+            })
+        } catch (e) {
+            console.error("Failed to toggle collapse", e)
+        }
     }, [user, folders])
 
-    const expandFolders = useCallback(async (folderIds: string[]) => {
-        if (!user) return
-        const batch = writeBatch(db)
 
-        // This function sets collapsed=false for specific folders
-        folderIds.forEach(id => {
-            const ref = doc(db, "users", user.uid, "folders", id)
-            batch.update(ref, { collapsed: false })
-        })
-
-        await batch.commit()
-    }, [user])
 
     const resetAndExpandFolders = useCallback(async (activeFolderIds: string[]) => {
         if (!user) return
         const batch = writeBatch(db)
 
+        // Logic: if folder is in activeFolderIds, it MUST be open (collapsed=false)
+        // if folder is NOT in activeFolderIds, it MUST be closed (collapsed=true)
+
         folders.forEach(f => {
             const shouldBeOpen = activeFolderIds.includes(f.id)
-            // Only update if changed (Minimize writes)
-            if (f.collapsed === shouldBeOpen) {
-                // Wait, if collapsed is true, and shouldBeOpen is true (it should be open), then we update.
-                // If collapsed=true (closed) and shouldBeOpen=true, we update to false.
-                // If collapsed=false (open) and shouldBeOpen=false, we update to true.
-                // Wait.
-                // collapsed: true. shouldBeOpen: true. -> Needs update to false.
-                // collapsed: false. shouldBeOpen: true. -> No update.
+            const currentCollapsed = f.collapsed
 
-                // Logic: collapsed should be !shouldBeOpen
-            }
-
-            if (f.collapsed === shouldBeOpen) {
+            // If it should be open, but is currently collapsed (true), we set to false.
+            if (shouldBeOpen && currentCollapsed) {
                 const ref = doc(db, "users", user.uid, "folders", f.id)
-                batch.update(ref, { collapsed: !shouldBeOpen })
+                batch.update(ref, { collapsed: false })
+            }
+            // If it should be closed (not active), but is currently open (false), we set to true.
+            else if (!shouldBeOpen && !currentCollapsed) {
+                const ref = doc(db, "users", user.uid, "folders", f.id)
+                batch.update(ref, { collapsed: true })
             }
         })
 
-        await batch.commit()
+        try {
+            await batch.commit()
+        } catch (e) {
+            console.error("Batch update failed", e)
+        }
     }, [user, folders])
 
     const addChatsToFolder = useCallback(async (folderId: string, newChatIds: string[]) => {
         if (!user) return
-        const folder = folders.find(f => f.id === folderId)
-        if (!folder) return
-
-        const newSet = new Set([...folder.chatIds, ...newChatIds])
-        await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
-            chatIds: Array.from(newSet)
-        })
-    }, [user, folders])
+        try {
+            await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
+                chatIds: arrayUnion(...newChatIds)
+            })
+        } catch (e) {
+            console.error("Failed to add chats", e)
+        }
+    }, [user])
 
     const removeChatFromFolder = useCallback(async (folderId: string, chatId: string) => {
         if (!user) return
-        const folder = folders.find(f => f.id === folderId)
-        if (!folder) return
-
-        const newIds = folder.chatIds.filter(id => id !== chatId)
-        await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
-            chatIds: newIds
-        })
-    }, [user, folders])
+        try {
+            await updateDoc(doc(db, "users", user.uid, "folders", folderId), {
+                chatIds: arrayRemove(chatId)
+            })
+        } catch (e) {
+            console.error("Failed to remove chat", e)
+        }
+    }, [user])
 
     const updateChatMetadata = useCallback(async (id: string, meta: Partial<ChatMetadata>) => {
         if (!user) return
@@ -155,13 +179,13 @@ export const useFolderStore = () => {
         chatMetadata,
         createFolder,
         deleteFolder,
-        renameFolder,
+        renameFolder: undefined, // Reserved for future use
         toggleFolderCollapse,
-        expandFolders,
         resetAndExpandFolders,
         addChatsToFolder,
         removeChatFromFolder,
         updateChatMetadata,
-        loading
+        loading,
+        firestoreError
     }
 }

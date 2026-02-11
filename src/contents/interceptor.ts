@@ -1,4 +1,6 @@
 import type { PlasmoCSConfig } from "plasmo"
+import { logger } from "~utils/logger"
+
 
 export const config: PlasmoCSConfig = {
     matches: ["https://gemini.google.com/*"],
@@ -6,11 +8,9 @@ export const config: PlasmoCSConfig = {
     run_at: "document_start"
 }
 
-console.log("[Gemini Folders] Interceptor Loaded (Network Only Mode)")
+logger.log("[Gemini Folders] Interceptor Loaded (Network Only Mode)")
 
-const XHR = XMLHttpRequest.prototype
-const open = XHR.open
-const send = XHR.send
+
 
 // Handshake Buffer: Stores initial chats if UI isn't ready
 let initialChatBuffer: any[] = []
@@ -18,14 +18,14 @@ let initialChatBuffer: any[] = []
 window.addEventListener("message", (event) => {
     if (event.source !== window) return
     if (event.data?.type === "GEMINI_UI_READY") {
-        console.log("[Gemini Folders] UI Ready Signal Received. Replaying Buffer.")
+        logger.log("[Gemini Folders] UI Ready Signal Received. Replaying Buffer.")
         if (initialChatBuffer.length > 0) {
             window.postMessage({ type: "GEMINI_CHATS_DETECTED", payload: initialChatBuffer }, "*")
         }
     }
 })
 
-// 1. Patch History to detect URL changes (for optimistic "New Chat" creation)
+// 1. Patch History & Popstate for URL tracking
 const pushState = history.pushState
 const replaceState = history.replaceState
 
@@ -33,7 +33,6 @@ const notifyUrlChange = () => {
     window.postMessage({ type: "GEMINI_URL_CHANGED", url: window.location.href }, "*")
 }
 
-// 2. Listen for Popstate (Back/Forward)
 window.addEventListener("popstate", notifyUrlChange)
 
 history.pushState = function (...args) {
@@ -49,22 +48,50 @@ history.replaceState = function (...args) {
 }
 
 // 2. Patch XHR to capture "batchexecute" responses
+const XHR = XMLHttpRequest.prototype
+const originalOpen = XHR.open
+const originalSend = XHR.send
+
 XHR.open = function (method: string, url: string | URL, async?: boolean, user?: string | null, password?: string | null) {
     this._url = url instanceof URL ? url.toString() : url
-    return open.apply(this, arguments as any)
+    return originalOpen.apply(this, arguments as any)
 }
 
 XHR.send = function (body) {
     this.addEventListener("load", function () {
         if (this._url && this._url.includes("batchexecute")) {
-            try {
-                processBatchResponse(this.responseText)
-            } catch (err) {
-                // Silently fail on parse errors
-            }
+            // Offload parsing to idle time to avoid blocking UI
+            requestIdleCallback(() => {
+                try {
+                    processBatchResponse(this.responseText)
+                } catch (err) {
+                    // Silently fail
+                }
+            })
         }
     })
-    return send.apply(this, arguments as any)
+    return originalSend.apply(this, arguments as any)
+}
+
+// 3. Patch Fetch for newer Gemini implementations
+const originalFetch = window.fetch
+window.fetch = async function (...args) {
+    const response = await originalFetch.apply(this, args)
+    const url = args[0] instanceof Request ? args[0].url : args[0].toString()
+
+    if (url.includes("batchexecute")) {
+        const clone = response.clone()
+        clone.text().then(text => {
+            requestIdleCallback(() => {
+                try {
+                    processBatchResponse(text)
+                } catch (e) {
+                    // Silently fail
+                }
+            })
+        }).catch(() => { })
+    }
+    return response
 }
 
 /**
@@ -110,8 +137,8 @@ function traverseAndDecode(node: any) {
 
             if (foundChats.length > 0) {
                 // Buffer & Broadcast
-                initialChatBuffer = foundChats // Store purely what we found in this batch (or append? Usually one batch has full list)
-                // Actually, Google sends "List" in one go. Overwriting buffer is safer than growing infinity.
+                // We overwrite the buffer with the latest "Fresh" list from network
+                initialChatBuffer = foundChats
                 window.postMessage({ type: "GEMINI_CHATS_DETECTED", payload: foundChats }, "*")
             }
         } catch (e) {
@@ -125,86 +152,100 @@ function traverseAndDecode(node: any) {
 
 /**
  * Recursive search for the Chat Signature:
- * [ "c_{id}", "Title", ..., [Timestamp], ... ]
+ * MATCH CRITERIA (Strict):
+ * 1. Node is Array
+ * 2. node[0] is string starting with "c_"
+ * 3. node contains a sub-array [number, number] (Timestamp Signature)
+ * 4. node[1] is the Title (String), must NOT start with "r_"
  */
 function findChatsRecursive(node: any, results: any[]) {
-    if (!node || typeof node !== 'object') return
+    if (!node || !Array.isArray(node)) {
+        if (node && typeof node === 'object') {
+            // If object, recurse values
+            for (const key in node) {
+                if (Object.prototype.hasOwnProperty.call(node, key)) {
+                    findChatsRecursive(node[key], results)
+                }
+            }
+        }
+        return
+    }
 
-    // 1. Check Signature
-    if (Array.isArray(node) && node.length >= 3) {
+    // Check strict signature
+    if (node.length >= 2) {
         const id = node[0]
         const title = node[1]
 
-        // STABLE IDENTIFIER: ID starts with "c_" AND Title is a string
         if (typeof id === 'string' && id.startsWith('c_') && typeof title === 'string') {
 
             // --- STRICT GARBAGE FILTERING ---
-            // 1. ID Check: No "_video_" (internal video metadata)
+
+            // 1. ID Check
             if (id.includes("_video_")) return
 
-            // 2. Title Check: No "r_" prefix, no UUIDs, no pure numbers
+            // 2. Title Check
             if (title.startsWith("r_")) return
-            if (/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(title)) return // UUID-like
-            if (/^\d+$/.test(title)) return // Pure Number
+            // UUID Pattern (8-4-4-4-12)
+            if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(title)) return
+            // Numeric Only
+            if (/^\d+$/.test(title)) return
 
-            // 3. Timestamp Check: Must have a valid historic timestamp
-            const timestamp = scanForTimestamp(node)
-            if (timestamp === 0) return // No timestamp found -> Invalid Entry
+            // 3. Timestamp Signature Check
+            // We look for a sub-array that looks like [1234567890, 1234567890]
+            // This is the most reliable way to confirm it's a chat object and not some other metadata
+            const timestamp = scanForTimestampSignature(node)
 
-            const cleanId = id.substring(2) // Remove "c_" prefix
+            if (timestamp > 0) {
+                const cleanId = id.substring(2) // Remove "c_"
 
-            results.push({
-                id: cleanId,
-                title: title,
-                lastInteracted: formatRelativeDate(timestamp),
-                timestamp: timestamp,
-                url: `/app/${cleanId}`,
-                isActive: false // UI determines this
-            })
-
-            // Don't recurse inside a found chat
-            return
+                // Avoid duplicates in the current batch result
+                if (!results.some(r => r.id === cleanId)) {
+                    results.push({
+                        id: cleanId,
+                        title: title,
+                        lastInteracted: formatRelativeDate(timestamp),
+                        timestamp: timestamp,
+                        url: `/app/${cleanId}`,
+                        isActive: false
+                    })
+                }
+                return // Found a chat, don't recurse inside it
+            }
         }
     }
 
-    // 2. Recurse Deeper
-    if (Array.isArray(node)) {
-        for (const child of node) findChatsRecursive(child, results)
-    } else {
-        for (const key in node) {
-            if (Object.prototype.hasOwnProperty.call(node, key)) {
-                findChatsRecursive(node[key], results)
-            }
-        }
+    // Recurse Deeper
+    for (const child of node) {
+        findChatsRecursive(child, results)
     }
 }
 
-function scanForTimestamp(chatNode: any[]): number {
-    // We look for a number that looks like a date.
-    // Your sample data: 1767226400 (Seconds) -> Year 2026
+function scanForTimestampSignature(node: any[]): number {
+    // We strictly look for a sub-array [number, number] where numbers are large (dates)
+    // The timestamp is usually the 1st or 2nd element of that sub-array.
 
-    const flatten = (arr: any[]): any[] => arr.flat(Infinity)
+    for (const item of node) {
+        if (Array.isArray(item) && item.length >= 1 && typeof item[0] === 'number') {
+            const val = item[0]
+            // Check reasonableness: Year 2023+ (in microseconds or milliseconds)
+            // 1.6e12 = 2020 (ms)
+            // 1.6e15 = 2020 (micros)
 
-    // We start looking from index 2 onwards to avoid ID/Title
-    const potentialData = chatNode.slice(2)
-    const flatData = flatten(potentialData)
-
-    for (const item of flatData) {
-        if (typeof item === 'number') {
-            // Check if Seconds (10 digits)
-            // 1.0e9 is Year 2001. 1.0e11 is Year 5000+.
-            if (item > 1000000000 && item < 100000000000) {
-                return item * 1000 // Convert Seconds to Milliseconds
+            // Case A: Milliseconds
+            if (val > 1600000000000 && val < 4000000000000) {
+                return val
             }
-            // Check if Milliseconds (13 digits)
-            // 1.0e12 is Year 2001.
-            if (item > 1000000000000) {
-                return item
+            // Case B: Microseconds (Common in Google Protobufs) -> Convert to ms
+            if (val > 1600000000000000) {
+                return Math.floor(val / 1000)
+            }
+            // Case C: Seconds (rare here, but possible)
+            if (val > 1600000000 && val < 4000000000) {
+                return val * 1000
             }
         }
     }
-
-    return 0 // No valid timestamp found
+    return 0
 }
 
 function formatRelativeDate(ts: number): string {
@@ -223,3 +264,4 @@ function formatRelativeDate(ts: number): string {
     }
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+

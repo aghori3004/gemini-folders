@@ -3,7 +3,6 @@ export interface Folder {
     name: string
     chatIds: string[]
     collapsed: boolean
-    color?: string
 }
 
 export interface ChatMetadata {

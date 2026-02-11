@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { useMemo, useState, useEffect, useRef } from "react"
 import type { ChatMetadata, Folder, ScrapedChat } from "~types"
 
 interface FolderItemProps {
@@ -10,17 +10,13 @@ interface FolderItemProps {
     onToggle: (id: string) => void
     onInsertChat: (folderId: string) => void
     onRenameChat: (chatId: string, newName: string) => void
+    onDeleteFolder: (id: string) => void
+    onAddChat: (id: string) => void
+    onRemoveChat: (folderId: string, chatId: string) => void
     searchQuery: string
 }
 
-// Icons extracted to prevent re-creation on render
-const FolderIcon = () => (
-    <svg fill="none" viewBox="0 0 24 24" width="20" height="20" className="plasmo-text-gray-500">
-        <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-    </svg>
-)
 
-// Replace the existing GreyFolderIcon component with this:
 export const GreyFolderIcon = () => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="plasmo-text-[#444746]">
         <path d="M4 19.5C3.45 19.5 2.97917 19.3042 2.5875 18.9125C2.19583 18.5208 2 18.05 2 17.5V6.5C2 5.95 2.19583 5.47917 2.5875 5.0875C2.97917 4.69583 3.45 4.5 4 4.5H9.5L11.5 6.5H20C20.55 6.5 21.0208 6.69583 21.4125 7.0875C21.8042 7.47917 22 7.95 22 8.5V17.5C22 18.05 21.8042 18.5208 21.4125 18.9125C21.0208 19.3042 20.55 19.5 20 19.5H4ZM4 17.5H20V8.5H10.675L8.675 6.5H4V17.5Z" fill="currentColor" />
@@ -42,7 +38,7 @@ const ArrowLeft = () => (
 
 const PencilIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
 )
@@ -53,13 +49,11 @@ const PlusIcon = () => (
     </svg>
 )
 
-// AddChatModal import removed
-
 export const FolderItem = ({
     folder,
     chats,
     metadata,
-    isNewChatActive,
+    isNewChatActive, // Legacy (can use currentChatId checks)
     currentChatId,
     onToggle,
     onInsertChat,
@@ -68,17 +62,24 @@ export const FolderItem = ({
     onAddChat,
     onRemoveChat,
     searchQuery
-}: FolderItemProps & { onDeleteFolder: (id: string) => void, onAddChat: (id: string) => void, onRemoveChat: (folderId: string, chatId: string) => void }) => {
+}: FolderItemProps) => {
     const [isHovered, setIsHovered] = useState(false)
     const [hoveredChatId, setHoveredChatId] = useState<string | null>(null)
     const [editingChatId, setEditingChatId] = useState<string | null>(null)
     const [editName, setEditName] = useState("")
 
-    // Highlight Logic
+    // Safety: Handle potential missing chatIds
+    const safeChatIds = folder.chatIds || []
+
     const isFolderMatch = useMemo(() => {
         if (!searchQuery) return false
         return folder.name.toLowerCase().includes(searchQuery.toLowerCase())
     }, [folder.name, searchQuery])
+
+    // Should this folder be open?
+    // 1. If not collapsed in DB
+    // 2. OR if searchQuery is present (Force Open to show matches)
+    const isOpen = !folder.collapsed || !!searchQuery
 
     // Renaming Handlers
     const startRenaming = (chatId: string, currentName: string) => {
@@ -99,9 +100,6 @@ export const FolderItem = ({
         setEditName("")
     }
 
-    // SAFETY: Handle legacy data where chatIds might be missing or named 'chats'
-    const safeChatIds = folder.chatIds || (folder as any).chats || []
-
     const sortedChatIds = useMemo(() => {
         return [...safeChatIds].sort((a, b) => {
             const chatA = chats.find(c => c.id === a)
@@ -112,8 +110,10 @@ export const FolderItem = ({
         })
     }, [safeChatIds, chats])
 
+    // "Insert Here" Logic: Active Chat exists AND is NOT in this folder
     const isCurrentChatInFolder = currentChatId && safeChatIds.includes(currentChatId)
-    const showInsertButton = isHovered && (isNewChatActive || (currentChatId && !isCurrentChatInFolder))
+    const canInsertCurrentChat = currentChatId && !isCurrentChatInFolder
+    const showInsertButton = isHovered && canInsertCurrentChat
 
     return (
         <div className="plasmo-flex plasmo-flex-col plasmo-mb-1">
@@ -135,10 +135,7 @@ export const FolderItem = ({
                 </div>
 
                 <div className="plasmo-flex plasmo-items-center plasmo-gap-1">
-
-                    {/* Add Chat Button removed */}
-
-                    {/* Show Delete/Insert buttons only on hover */}
+                    {/* Hover Actions */}
                     {isHovered && (
                         <>
                             {showInsertButton && (
@@ -147,6 +144,7 @@ export const FolderItem = ({
                                     title="Insert current chat"
                                     role="button"
                                     onClick={(e) => {
+                                        e.preventDefault()
                                         e.stopPropagation()
                                         onInsertChat(folder.id)
                                     }}
@@ -154,11 +152,14 @@ export const FolderItem = ({
                                     <ArrowLeft />
                                 </div>
                             )}
-                            {safeChatIds.length > 0 && (
+
+                            {/* Always show Add Chat if not inserting */}
+                            {(!showInsertButton || safeChatIds.length > 0) && (
                                 <div
                                     className="plasmo-w-[20px] plasmo-h-[20px] plasmo-flex plasmo-items-center plasmo-justify-center plasmo-rounded-full hover:plasmo-bg-[#c8cdd6] plasmo-text-[#444746]"
                                     role="button"
                                     onClick={(e) => {
+                                        e.preventDefault()
                                         e.stopPropagation()
                                         onAddChat(folder.id)
                                     }}
@@ -167,10 +168,12 @@ export const FolderItem = ({
                                     <PlusIcon />
                                 </div>
                             )}
+
                             <div
                                 className="plasmo-w-[20px] plasmo-h-[20px] plasmo-flex plasmo-items-center plasmo-justify-center plasmo-rounded-full hover:plasmo-bg-[#c8cdd6] plasmo-text-[#444746]"
                                 role="button"
                                 onClick={(e) => {
+                                    e.preventDefault()
                                     e.stopPropagation()
                                     onDeleteFolder(folder.id)
                                 }}
@@ -183,7 +186,6 @@ export const FolderItem = ({
                         </>
                     )}
 
-                    {/* Chevron always visible */}
                     <div className={folder.collapsed ? "" : "plasmo-rotate-180"}>
                         <ChevronDown />
                     </div>
@@ -192,7 +194,7 @@ export const FolderItem = ({
 
             {/* Content (Chats) */}
             {
-                !folder.collapsed && (
+                isOpen && (
                     <div className="plasmo-flex plasmo-flex-col plasmo-gap-1 plasmo-mt-1">
                         {sortedChatIds.map((chatId) => {
                             const chat = chats.find((c) => c.id === chatId)
@@ -200,7 +202,22 @@ export const FolderItem = ({
 
                             const currentCustomName = meta?.customName || chat?.title || meta?.originalTitle || "Chat"
                             const originalTitle = chat?.title || meta?.originalTitle || "Unknown"
-                            const dateDisplay = chat?.lastInteracted || meta?.lastInteracted || ""
+                            // Format the date: usage of new "dateAdded" freezer field with fallback
+                            // We need a helper for relative time if we are using raw timestamps
+                            const formatRelativeDate = (timestamp: number | string) => {
+                                if (!timestamp) return ""
+                                const date = new Date(timestamp)
+                                const now = new Date()
+                                const diff = now.getTime() - date.getTime()
+                                const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+
+                                if (days === 0) return "Today"
+                                if (days === 1) return "Yesterday"
+                                if (days < 7) return `${days}d ago`
+                                return date.toLocaleDateString()
+                            }
+
+                            const displayDate = chat?.lastInteracted || formatRelativeDate(chat?.timestamp)
 
                             const isActive = chatId === currentChatId
                             const isHovered = hoveredChatId === chatId
@@ -210,10 +227,10 @@ export const FolderItem = ({
                                 originalTitle.toLowerCase().includes(searchQuery.toLowerCase())
                             )
 
-                            // Determine Class logic
+                            // Visual Pills Logic
                             // Active -> Blue (#d3e3fd)
-                            // Match -> Grey (#e0e3eb)
-                            // Default -> Hover Grey
+                            // Search Match (inactive) -> Grey (#e0e3eb)
+                            // Hover -> Standard Hover Grey
                             let bgClass = "hover:plasmo-bg-[#e0e3eb]"
                             if (isActive) bgClass = "plasmo-bg-[#d3e3fd]"
                             else if (isChatMatch) bgClass = "plasmo-bg-[#e0e3eb]"
@@ -221,7 +238,7 @@ export const FolderItem = ({
                             return (
                                 <a
                                     key={chatId}
-                                    href={chat.url}
+                                    href={chat?.url}
                                     className={`plasmo-flex plasmo-items-start plasmo-py-1.5 plasmo-pl-[40px] plasmo-pr-2 plasmo-cursor-pointer plasmo-rounded-xl plasmo-group plasmo-transition-colors plasmo-no-underline ${bgClass}`}
                                     onMouseEnter={() => setHoveredChatId(chatId)}
                                     onMouseLeave={() => setHoveredChatId(null)}
@@ -238,6 +255,7 @@ export const FolderItem = ({
                                         {editingChatId === chatId ? (
                                             <input
                                                 autoFocus
+                                                onFocus={(e) => e.target.select()}
                                                 className="plasmo-bg-transparent plasmo-border-none plasmo-outline-none plasmo-text-[13px] plasmo-font-medium plasmo-text-[#1f1f1f] plasmo-w-full plasmo-p-0 plasmo-m-0"
                                                 value={editName}
                                                 onChange={(e) => setEditName(e.target.value)}
@@ -247,7 +265,10 @@ export const FolderItem = ({
                                                     e.stopPropagation()
                                                 }}
                                                 onBlur={saveRename}
-                                                onClick={(e) => e.stopPropagation()}
+                                                onClick={(e) => {
+                                                    e.preventDefault()
+                                                    e.stopPropagation()
+                                                }}
                                             />
                                         ) : (
                                             <span
@@ -263,10 +284,10 @@ export const FolderItem = ({
                                             <span className="plasmo-truncate plasmo-max-w-[120px]" title={originalTitle}>
                                                 {originalTitle}
                                             </span>
-                                            {dateDisplay && (
+                                            {displayDate && (
                                                 <>
                                                     <span className="plasmo-mx-1">•</span>
-                                                    <span className="plasmo-whitespace-nowrap plasmo-opacity-80">{dateDisplay}</span>
+                                                    <span className="plasmo-whitespace-nowrap plasmo-opacity-80">{displayDate}</span>
                                                 </>
                                             )}
                                         </div>
@@ -280,6 +301,7 @@ export const FolderItem = ({
                                                 className="plasmo-w-[20px] plasmo-h-[20px] plasmo-flex plasmo-items-center plasmo-justify-center plasmo-rounded-full hover:plasmo-bg-[#c8cdd6] plasmo-text-[#444746]"
                                                 role="button"
                                                 onClick={(e) => {
+                                                    e.preventDefault()
                                                     e.stopPropagation()
                                                     startRenaming(chatId, currentCustomName)
                                                 }}
@@ -293,6 +315,7 @@ export const FolderItem = ({
                                                 className="plasmo-w-[20px] plasmo-h-[20px] plasmo-flex plasmo-items-center plasmo-justify-center plasmo-rounded-full hover:plasmo-bg-[#c8cdd6] plasmo-text-[#444746]"
                                                 role="button"
                                                 onClick={(e) => {
+                                                    e.preventDefault()
                                                     e.stopPropagation()
                                                     onRemoveChat(folder.id, chatId)
                                                 }}
@@ -316,6 +339,7 @@ export const FolderItem = ({
                             <div
                                 className="plasmo-flex plasmo-items-center plasmo-h-[28px] plasmo-pl-[56px] plasmo-pr-2 plasmo-cursor-pointer hover:plasmo-bg-[#e0e3eb] plasmo-rounded-full plasmo-text-[13px] plasmo-text-[#444746] plasmo-mt-1"
                                 onClick={(e) => {
+                                    e.preventDefault()
                                     e.stopPropagation()
                                     onAddChat(folder.id)
                                 }}
@@ -329,8 +353,6 @@ export const FolderItem = ({
                     </div>
                 )
             }
-
-            {/* Add Chat Modal removed from here */}
         </div>
     )
 }

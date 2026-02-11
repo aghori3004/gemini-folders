@@ -1,6 +1,9 @@
 import cssText from "data-text:~style.css"
 import type { PlasmoCSConfig, PlasmoGetInlineAnchor } from "plasmo"
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
+
+import { logger } from "~utils/logger"
+import { ErrorBoundary } from "./components/ErrorBoundary"
 
 import { MainUI } from "./components/MainUI"
 
@@ -8,29 +11,33 @@ export const config: PlasmoCSConfig = {
   matches: ["https://gemini.google.com/*"]
 }
 
-// Helper to traverse Shadow DOMs
-const deepQuerySelectorAll = (selector: string, root: Node = document): Element[] => {
-  const results: Element[] = []
-  const walk = (node: Node) => {
-    if (node instanceof Element) {
-      if (node.matches(selector)) results.push(node)
-      if (node.shadowRoot) walk(node.shadowRoot)
-    }
-    const children = node.childNodes
-    for (let i = 0; i < children.length; i++) walk(children[i])
-  }
-  walk(root)
-  return results
-}
-
 export const getInlineAnchor: PlasmoGetInlineAnchor = async () => {
-  const gemsContainer = document.querySelector("infinite-scroller .gems-list-container")
-  console.log("[Gemini Folders] Looking for anchor:", { gemsContainer })
-  if (gemsContainer) return gemsContainer
+  // Try multiple selectors for different Gemini page layouts
+  const selectors = [
+    "infinite-scroller .gems-list-container",
+    "infinite-scroller .chat-history",
+    ".gem-list-container",  // Alternative class name
+    "nav .chat-list",       // Alternative: nav-based sidebar
+    "nav [role='list']",    // Generic role-based
+    "[data-test-id='chat-list']", // Test ID if available
+    ".sidebar-content",     // Generic sidebar
+    "infinite-scroller"     // Last resort: just the scroller itself
+  ]
 
-  const history = document.querySelector("infinite-scroller .chat-history")
-  console.log("[Gemini Folders] Fallback anchor:", { history })
-  return history
+  for (const selector of selectors) {
+    try {
+      const element = document.querySelector(selector)
+      if (element) {
+        logger.log("[Gemini Folders] Found anchor with selector:", selector)
+        return element
+      }
+    } catch (e) {
+      logger.warn("[Gemini Folders] Selector failed:", selector, e)
+    }
+  }
+
+  logger.warn("[Gemini Folders] No anchor found! Retrying...")
+  return null  // Return null to let Plasmo retry
 }
 
 export const getPosition = (anchor: Element) => {
@@ -58,7 +65,7 @@ export const getStyle = (): HTMLStyleElement => {
 }
 
 const PlasmoInline = () => {
-  console.log("[Gemini Folders] Component Mounting/Rendering")
+  logger.log("[Gemini Folders] Component Mounting/Rendering")
   const [isVisible, setIsVisible] = useState(true)
 
   // Fixed constants
@@ -74,13 +81,21 @@ const PlasmoInline = () => {
       }
     })
 
-    const sidebar = document.querySelector("infinite-scroller")
+    // Try multiple sidebar selectors
+    const sidebarSelectors = ["infinite-scroller", "nav", "[role='navigation']"]
+    let sidebar: Element | null = null
+
+    for (const selector of sidebarSelectors) {
+      sidebar = document.querySelector(selector)
+      if (sidebar) break
+    }
+
     if (sidebar) {
       resizeObserver.observe(sidebar)
     } else {
-      // Fallback or retry? If not found, assume visible or add retry logic.
-      // For now, if not found, we just stay visible (default) to avoid disappearing.
-      console.warn("[Gemini Folders] infinite-scroller not found for visibility observer.")
+      // Fallback: assume visible
+      logger.warn("[Gemini Folders] Sidebar not found for visibility observer, assuming visible.")
+      setIsVisible(true)
     }
     return () => resizeObserver.disconnect()
   }, [])
@@ -89,7 +104,9 @@ const PlasmoInline = () => {
     <div
       id="plasmo-container-div"
       style={{ display: isVisible ? "block" : "none", width: "100%" }}>
-      <MainUI paddingLeft={paddingLeft} paddingRight={paddingRight} />
+      <ErrorBoundary>
+        <MainUI paddingLeft={paddingLeft} paddingRight={paddingRight} />
+      </ErrorBoundary>
     </div>
   )
 }

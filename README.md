@@ -1,33 +1,138 @@
-This is a [Plasmo extension](https://docs.plasmo.com/) project bootstrapped with [`plasmo init`](https://www.npmjs.com/package/plasmo).
+# Gemini Folders
 
-## Getting Started
+> Organize your Google Gemini AI chats into folders — right inside the sidebar.
 
-First, run the development server:
+<p align="center">
+  <img src="assets/icon.png" alt="Gemini Folders Icon" width="128" />
+</p>
 
-```bash
-pnpm dev
-# or
-npm run dev
-```
+A Chrome extension that adds a fully-featured folder system to Google Gemini's sidebar. Create folders, drag chats in, search across everything — and keep your AI conversations organized.
 
-Open your browser and load the appropriate development build. For example, if you are developing for the chrome browser, using manifest v3, use: `build/chrome-mv3-dev`.
+## ✨ Features
 
-You can start editing the popup by modifying `popup.tsx`. It should auto-update as you make changes. To add an options page, simply add a `options.tsx` file to the root of the project, with a react component default exported. Likewise to add a content page, add a `content.ts` file to the root of the project, importing some module and do some logic, then reload the extension on your browser.
+- **Create folders** to group related Gemini conversations
+- **Add/remove chats** to any folder with a click
+- **Search** across folders and chat titles instantly
+- **Auto-expand** the folder containing your currently active chat
+- **Deep scroll** to discover older conversations not yet loaded by Gemini
+- **Multi-device sync** — folders are saved to Firebase and follow your Google account
+- **Native look & feel** — styled to blend seamlessly with Gemini's UI
 
-For further guidance, [visit our Documentation](https://docs.plasmo.com/)
+## 🛠 Tech Stack
 
-## Making production build
+| Layer | Technology |
+|-------|------------|
+| Framework | [Plasmo](https://docs.plasmo.com/) (Chrome Extension) |
+| UI | React 18 + Tailwind CSS |
+| Language | TypeScript |
+| Backend | Firebase Auth + Firestore |
+| Interception | XHR/Fetch monkey-patching in MAIN world |
 
-Run the following:
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Node.js** 18+ and **pnpm** installed
+- A [Firebase project](https://console.firebase.google.com/) with Firestore and Authentication enabled
+- A Chrome browser
+
+### Setup
+
+1. **Clone the repo**
+   ```bash
+   git clone https://github.com/aghori3004/gemini-folders.git
+   cd gemini-folders/gemini-app
+   ```
+
+2. **Install dependencies**
+   ```bash
+   pnpm install
+   ```
+
+3. **Configure environment variables**
+
+   Create a `.env` file in the project root:
+   ```env
+   PLASMO_PUBLIC_FIREBASE_API_KEY=your_api_key
+   PLASMO_PUBLIC_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+   PLASMO_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
+   PLASMO_PUBLIC_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
+   PLASMO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+   PLASMO_PUBLIC_FIREBASE_APP_ID=your_app_id
+   PLASMO_PUBLIC_FIREBASE_MEASUREMENT_ID=your_measurement_id
+   ```
+
+4. **Start the development server**
+   ```bash
+   pnpm dev
+   ```
+
+5. **Load the extension in Chrome**
+   - Go to `chrome://extensions`
+   - Enable **Developer mode**
+   - Click **Load unpacked**
+   - Select the `build/chrome-mv3-dev` folder
+
+### Production Build
 
 ```bash
 pnpm build
-# or
-npm run build
 ```
 
-This should create a production bundle for your extension, ready to be zipped and published to the stores.
+The production bundle is generated in `build/chrome-mv3-prod`, ready to be zipped and submitted to the Chrome Web Store.
 
-## Submit to the webstores
+## 📁 Project Structure
 
-The easiest way to deploy your Plasmo extension is to use the built-in [bpp](https://bpp.browser.market) GitHub action. Prior to using this action however, make sure to build your extension and upload the first version to the store to establish the basic credentials. Then, simply follow [this setup instruction](https://docs.plasmo.com/framework/workflows/submit) and you should be on your way for automated submission!
+```
+src/
+├── background.ts          # Service worker (auth token, popup)
+├── content.tsx             # Inline content script (UI injector)
+├── firebase.ts             # Firebase config & initialization  
+├── popup.tsx               # Extension popup (login/logout)
+├── types.ts                # TypeScript interfaces
+├── style.css               # Tailwind entry + shadow DOM reset
+├── utils/
+│   └── logger.ts           # Dev-only logging utility
+├── hooks/
+│   ├── useAuth.tsx          # Google Sign-In + session sync
+│   ├── useChatScraper.tsx   # XHR interception + deep scroll
+│   └── useFolderStore.tsx   # Firestore CRUD for folders
+├── contents/
+│   └── interceptor.ts      # MAIN world network interceptor
+└── components/
+    ├── MainUI.tsx           # Root UI controller
+    ├── FolderList.tsx       # Folder list renderer
+    ├── FolderItem.tsx       # Individual folder + chat items
+    ├── CreateFolderModal.tsx # New folder creation dialog
+    ├── AddChatModal.tsx     # Add/remove chats dialog
+    └── ErrorBoundary.tsx    # React error boundary
+```
+
+## 🔒 Privacy
+
+This extension collects **only** what's needed to organize your chats:
+- Google account info (for authentication)
+- Chat titles and IDs (for folder organization)
+- Folder names you create
+
+**We do not** read chat message content, track browsing, or share data with third parties.
+
+See the full [Privacy Policy](PRIVACY_POLICY.md).
+
+## 📄 License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repo
+2. Create a feature branch (`git checkout -b feature/awesome-feature`)
+3. Commit your changes (`git commit -m 'Add awesome feature'`)
+4. Push to the branch (`git push origin feature/awesome-feature`)
+5. Open a Pull Request
+
+## 📬 Contact
+
+**Divyansh Gangwar** — [divyanshgangwar3004@gmail.com](mailto:divyanshgangwar3004@gmail.com)

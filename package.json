@@ -1,8 +1,8 @@
 {
-  "name": "gemini-app",
-  "displayName": "Gemini app",
-  "version": "0.0.1",
-  "description": "Folder feature for Gemini",
+  "name": "gemini-folders",
+  "displayName": "Gemini Folders",
+  "version": "1.0.0",
+  "description": "Organize your Gemini chats into folders. Create, manage, and search folders to keep your AI conversations structured and accessible.",
   "author": "Divyansh Gangwar <divyanshgangwar3004@gmail.com>",
   "scripts": {
     "dev": "plasmo dev",
@@ -10,8 +10,7 @@
     "package": "plasmo package"
   },
   "dependencies": {
-    "@plasmohq/storage": "^1.15.0",
-    "firebase": "^12.7.0",
+    "firebase": "^10.13.0",
     "plasmo": "0.90.5",
     "react": "18.2.0",
     "react-dom": "18.2.0",
@@ -23,7 +22,6 @@
     "@types/node": "20.11.5",
     "@types/react": "18.2.48",
     "@types/react-dom": "18.2.18",
-    "crypto-browserify": "^3.12.1",
     "postcss": "8.4.33",
     "prettier": "3.2.4",
     "typescript": "5.3.3"
@@ -45,6 +43,20 @@
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile"
       ]
-    }
+    },
+    "content_security_policy": {
+      "extension_pages": "script-src 'self'; object-src 'none'; img-src 'self' data: https://lh3.googleusercontent.com https://*.googleusercontent.com;"
+    },
+    "web_accessible_resources": [
+      {
+        "resources": [
+          "*.js",
+          "*.css"
+        ],
+        "matches": [
+          "https://gemini.google.com/*"
+        ]
+      }
+    ]
   }
 }

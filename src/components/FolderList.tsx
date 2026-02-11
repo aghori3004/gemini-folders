@@ -17,7 +17,7 @@ interface FolderListProps {
     searchQuery: string
 }
 
-export const FolderList = ({
+export const FolderList = React.memo(({
     folders,
     allChats,
     metadata,
@@ -58,4 +58,4 @@ export const FolderList = ({
             })}
         </div>
     )
-}
+})
