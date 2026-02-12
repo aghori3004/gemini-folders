@@ -1,6 +1,6 @@
 {
-  "name": "gemini-folders",
-  "displayName": "Gemini Folders",
+  "name": "folders-for-gemini",
+  "displayName": "Folders for Gemini",
   "version": "1.0.0",
   "description": "Organize your Gemini chats into folders. Create, manage, and search folders to keep your AI conversations structured and accessible.",
   "author": "Divyansh Gangwar <divyanshgangwar3004@gmail.com>",
