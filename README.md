@@ -10,16 +10,13 @@ A Chrome extension that adds a fully-featured folder system to Google Gemini's s
 
 ## 📸 Screenshots
 
-<p align="center">
-  <img src="src/screenshots/2.png" alt="Screenshot 1" width="45%" />
-  &nbsp;
-  <img src="src/screenshots/3.png" alt="Screenshot 2" width="45%" />
-</p>
-<p align="center">
-  <img src="src/screenshots/4.png" alt="Screenshot 3" width="45%" />
-  &nbsp;
-  <img src="src/screenshots/5.png" alt="Screenshot 4" width="45%" />
-</p>
+![Screenshot 1](src/screenshots/2.png)
+
+![Screenshot 2](src/screenshots/3.png)
+
+![Screenshot 3](src/screenshots/4.png)
+
+![Screenshot 4](src/screenshots/5.png)
 
 ## ✨ Features
 
