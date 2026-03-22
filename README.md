@@ -8,6 +8,19 @@
 
 A Chrome extension that adds a fully-featured folder system to Google Gemini's sidebar. Create folders, drag chats in, search across everything — and keep your AI conversations organized.
 
+## 📸 Screenshots
+
+<p align="center">
+  <img src="src/screenshots/2.png" alt="Screenshot 1" width="45%" />
+  &nbsp;
+  <img src="src/screenshots/3.png" alt="Screenshot 2" width="45%" />
+</p>
+<p align="center">
+  <img src="src/screenshots/4.png" alt="Screenshot 3" width="45%" />
+  &nbsp;
+  <img src="src/screenshots/5.png" alt="Screenshot 4" width="45%" />
+</p>
+
 ## ✨ Features
 
 - **Create folders** to group related Gemini conversations
